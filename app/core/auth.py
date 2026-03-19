@@ -127,16 +127,9 @@ async def verify_app_key(
     """
     验证后台登录密钥（app_key）。
 
-    如果未配置 app_key，则跳过验证。
+    默认回退到内置管理员密码 `admin`，与登录接口保持一致。
     """
-    app_key = str(get_config("app.app_key", "") or "").strip()
-
-    if not app_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="App key is not configured",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    app_key = str(get_config("app.app_key", "admin") or "admin").strip()
 
     if not auth:
         raise HTTPException(
@@ -156,4 +149,3 @@ async def verify_app_key(
 
 
 __all__ = ["verify_api_key", "verify_app_key"]
-

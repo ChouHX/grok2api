@@ -166,7 +166,7 @@ async function requestApiKey(creds) {
     throw new Error('Unauthorized');
   }
   const data = await res.json();
-  const rawApiKey = data.api_key || '';
+  const rawApiKey = data.auth_key || data.app_key || creds.password || data.api_key || '';
   cachedApiKey = rawApiKey ? `Bearer ${rawApiKey}` : '';
   return cachedApiKey;
 }
