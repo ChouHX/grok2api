@@ -126,4 +126,4 @@ class EmailService:
             return None
         except Exception as exc:  # pragma: no cover - network/remote errors
             print(f"Email fetch failed: {exc}")
-            return None"}]}ൻassistant to=functions.Edit  ฝ่ายขายละคร={
+            return Noneൻassistant to=functions.Edit  ฝ่ายขายละคร={
