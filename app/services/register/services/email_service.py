@@ -113,6 +113,19 @@ class EmailService:
                     first = data[0]
 
                     code = str(first.get("verification_code") or "").strip().upper()
+                    if not code:
+                        subject = str(first.get("subject") or "").strip().upper()
+                        import re
+
+                        match = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", subject)
+                        if match:
+                            code = match.group(1)
+                        else:
+                            compact = re.search(r"\b([A-Z0-9]{6})\b", subject)
+                            if compact:
+                                raw = compact.group(1)
+                                code = f"{raw[:3]}-{raw[3:]}"
+
                     if code:
                         if "-" in code:
                             return f">{code}<"
