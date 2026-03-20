@@ -48,8 +48,8 @@ email_domain = ""
 admin_password = ""
 yescaptcha_key = ""
 solver_url = "http://127.0.0.1:5072"
-# 推荐 camoufox（对 accounts.x.ai 的 Turnstile 成功率更高）；若环境未安装会自动回退到 chromium。
-solver_browser_type = "camoufox"
+# Docker 默认使用 chromium；如需更高通过率可手动改为 camoufox。
+solver_browser_type = "chromium"
 solver_threads = 5
 register_threads = 10
 default_count = 100

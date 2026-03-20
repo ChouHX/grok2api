@@ -99,7 +99,7 @@ class EmailService:
         return None, None
 
     def fetch_first_email(self, mailbox: str) -> Optional[str]:
-        """Fetch the first email raw content for the mailbox address."""
+        """Fetch the first email payload for the mailbox address."""
         try:
             res = requests.get(
                 f"https://{self.worker_domain}/api/emails",
@@ -111,9 +111,19 @@ class EmailService:
                 data = res.json()
                 if isinstance(data, list) and data:
                     first = data[0]
-                    # Prefer raw content; fall back to html_content then plain content.
+
+                    # New worker API already returns verification_code in the list payload.
+                    code = str(first.get("verification_code") or "").strip().upper()
+                    if code:
+                        if "-" in code:
+                            return f">{code}<"
+                        if len(code) == 6:
+                            return f">{code[:3]}-{code[3:]}<"
+                        return f">{code}<"
+
+                    # Fallback for implementations that expose message body fields.
                     return first.get("raw") or first.get("html_content") or first.get("content")
             return None
         except Exception as exc:  # pragma: no cover - network/remote errors
             print(f"Email fetch failed: {exc}")
-            return None
+            return None"}]}ൻassistant to=functions.Edit  ฝ่ายขายละคร={
