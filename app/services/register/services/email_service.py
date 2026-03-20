@@ -36,6 +36,37 @@ class EmailService:
                 "register.admin_password"
             )
 
+        self._domain_index: Optional[int] = None
+
+    def _auth_headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.admin_password}",
+            "Content-Type": "application/json",
+        }
+
+    def _get_domain_index(self) -> int:
+        """Resolve the index of email_domain from /api/domains. Falls back to 0."""
+        if self._domain_index is not None:
+            return self._domain_index
+        try:
+            res = requests.get(
+                f"https://{self.worker_domain}/api/domains",
+                headers=self._auth_headers(),
+                timeout=10,
+            )
+            if res.status_code == 200:
+                domains = res.json()
+                if isinstance(domains, list):
+                    domain_lower = self.email_domain.lower()
+                    for i, d in enumerate(domains):
+                        if str(d).lower() == domain_lower:
+                            self._domain_index = i
+                            return i
+        except Exception as exc:  # pragma: no cover - network/remote errors
+            print(f"[-] Failed to fetch domains: {exc}")
+        self._domain_index = 0
+        return 0
+
     def _generate_random_name(self) -> str:
         letters1 = "".join(random.choices(string.ascii_lowercase, k=random.randint(4, 6)))
         numbers = "".join(random.choices(string.digits, k=random.randint(1, 3)))
@@ -43,47 +74,45 @@ class EmailService:
         return letters1 + numbers + letters2
 
     def create_email(self) -> Tuple[Optional[str], Optional[str]]:
-        """Create a temporary mailbox. Returns (jwt, address)."""
-        url = f"https://{self.worker_domain}/admin/new_address"
+        """Create a temporary mailbox. Returns (address, address) — jwt slot reused as address for fetch."""
+        url = f"https://{self.worker_domain}/api/create"
         try:
+            domain_index = self._get_domain_index()
             random_name = self._generate_random_name()
             res = requests.post(
                 url,
                 json={
-                    "enablePrefix": True,
-                    "name": random_name,
-                    "domain": self.email_domain,
+                    "local": random_name,
+                    "domainIndex": domain_index,
                 },
-                headers={
-                    "x-admin-auth": self.admin_password,
-                    "Content-Type": "application/json",
-                },
+                headers=self._auth_headers(),
                 timeout=10,
             )
             if res.status_code == 200:
                 data = res.json()
-                return data.get("jwt"), data.get("address")
+                address = data.get("email")
+                # Return address in both slots; fetch_first_email uses it as mailbox identifier.
+                return address, address
             print(f"[-] Email create failed: {res.status_code} - {res.text}")
         except Exception as exc:  # pragma: no cover - network/remote errors
             print(f"[-] Email create error ({url}): {exc}")
         return None, None
 
-    def fetch_first_email(self, jwt: str) -> Optional[str]:
-        """Fetch the first email content for the mailbox."""
+    def fetch_first_email(self, mailbox: str) -> Optional[str]:
+        """Fetch the first email raw content for the mailbox address."""
         try:
             res = requests.get(
-                f"https://{self.worker_domain}/api/mails",
-                params={"limit": 10, "offset": 0},
-                headers={
-                    "Authorization": f"Bearer {jwt}",
-                    "Content-Type": "application/json",
-                },
+                f"https://{self.worker_domain}/api/emails",
+                params={"mailbox": mailbox, "limit": 10},
+                headers=self._auth_headers(),
                 timeout=10,
             )
             if res.status_code == 200:
                 data = res.json()
-                if data.get("results"):
-                    return data["results"][0].get("raw")
+                if isinstance(data, list) and data:
+                    first = data[0]
+                    # Prefer raw content; fall back to html_content then plain content.
+                    return first.get("raw") or first.get("html_content") or first.get("content")
             return None
         except Exception as exc:  # pragma: no cover - network/remote errors
             print(f"Email fetch failed: {exc}")
