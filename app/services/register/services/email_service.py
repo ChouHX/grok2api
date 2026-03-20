@@ -112,7 +112,6 @@ class EmailService:
                 if isinstance(data, list) and data:
                     first = data[0]
 
-                    # New worker API already returns verification_code in the list payload.
                     code = str(first.get("verification_code") or "").strip().upper()
                     if code:
                         if "-" in code:
@@ -121,9 +120,8 @@ class EmailService:
                             return f">{code[:3]}-{code[3:]}<"
                         return f">{code}<"
 
-                    # Fallback for implementations that expose message body fields.
                     return first.get("raw") or first.get("html_content") or first.get("content")
             return None
         except Exception as exc:  # pragma: no cover - network/remote errors
             print(f"Email fetch failed: {exc}")
-            return Noneൻassistant to=functions.Edit  ฝ่ายขายละคร={
+            return None
