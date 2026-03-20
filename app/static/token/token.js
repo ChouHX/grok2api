@@ -14,6 +14,11 @@ let autoRegisterLastAdded = 0;
 let liveStatsTimer = null;
 let isWorkersRuntime = false;
 let isNsfwRefreshAllRunning = false;
+let isMailboxClearRunning = false;
+let mailboxClearResults = [];
+let lastAutoRegisterMailboxCount = 0;
+let lastAutoRegisterJobMailboxes = [];
+let lastAutoRegisterJobId = null;
 
 let displayTokens = [];
 const filterState = {
@@ -77,6 +82,17 @@ function normalizeTokenRecord(pool, raw) {
   const status = normalizeStatus(source.status);
   const quotaParsed = parseQuotaValue(source.quota);
   const heavyParsed = parseQuotaValue(source.heavy_quota);
+  const mailboxEmails = Array.isArray(source.mailbox_emails)
+    ? source.mailbox_emails.map(v => String(v || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const mailboxByJob = source.mailbox_by_job && typeof source.mailbox_by_job === 'object' && !Array.isArray(source.mailbox_by_job)
+    ? Object.fromEntries(
+        Object.entries(source.mailbox_by_job).map(([jobId, list]) => [
+          String(jobId),
+          Array.isArray(list) ? list.map(v => String(v || '').trim().toLowerCase()).filter(Boolean) : []
+        ])
+      )
+    : {};
 
   return {
     token,
@@ -89,6 +105,8 @@ function normalizeTokenRecord(pool, raw) {
     note: source.note || '',
     fail_count: source.fail_count || 0,
     use_count: source.use_count || 0,
+    mailbox_emails: mailboxEmails,
+    mailbox_by_job: mailboxByJob,
     pool: pool,
     _selected: false,
   };
@@ -642,6 +660,8 @@ async function submitManualAdd() {
     note: note,
     status: 'active',
     use_count: 0,
+    mailbox_emails: [],
+    mailbox_by_job: {},
     _selected: false
   });
 
@@ -721,7 +741,10 @@ async function startAutoRegister() {
 
     const data = await res.json();
     autoRegisterJobId = data.job?.job_id || null;
+    lastAutoRegisterJobId = autoRegisterJobId;
     autoRegisterLastAdded = 0;
+    lastAutoRegisterMailboxCount = 0;
+    lastAutoRegisterJobMailboxes = [];
     updateAutoRegisterStatus('正在启动注册...');
     updateAutoRegisterLogs(data.job?.logs || []);
 
@@ -735,6 +758,86 @@ async function startAutoRegister() {
     pollAutoRegisterStatus();
   } catch (e) {
     showToast('启动失败: ' + e.message, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+function updateAutoRegisterMailboxSummary(data) {
+  const summaryEl = document.getElementById('auto-register-mailbox-summary');
+  if (!summaryEl) return;
+  const mailboxes = Array.isArray(data?.mailboxes) ? data.mailboxes : [];
+  const total = mailboxes.length;
+  const jobId = data?.job_id || '';
+  lastAutoRegisterMailboxCount = total;
+  lastAutoRegisterJobMailboxes = mailboxes;
+  summaryEl.classList.remove('hidden');
+  if (!total) {
+    summaryEl.textContent = '当前未记录注册邮箱';
+    return;
+  }
+  summaryEl.textContent = jobId ? `已记录 ${total} 个注册邮箱（job ${jobId}）` : `已记录 ${total} 个注册邮箱`;
+}
+
+async function batchClearRegisterMailboxes() {
+  if (isMailboxClearRunning) return;
+  const selected = flatTokens.filter(t => t._selected);
+  if (selected.length === 0) return showToast('未选择 Token', 'error');
+
+  const mailboxes = [];
+  const seen = new Set();
+  selected.forEach(t => {
+    const list = Array.isArray(t.mailbox_emails) ? t.mailbox_emails : [];
+    list.forEach(mailbox => {
+      const value = String(mailbox || '').trim().toLowerCase();
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      mailboxes.push(value);
+    });
+  });
+
+  if (!mailboxes.length) {
+    showToast('所选 Token 没有可清空的注册邮箱', 'warning');
+    return;
+  }
+
+  const ok = await confirmAction(`确认清空选中 Token 关联的 ${mailboxes.length} 个注册邮箱吗？`, { okText: '清空', cancelText: '取消' });
+  if (!ok) return;
+
+  isMailboxClearRunning = true;
+  const btn = document.getElementById('btn-batch-clear-mailbox');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/v1/admin/worker-emails/clear', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(apiKey)
+      },
+      body: JSON.stringify({ mailboxes })
+    });
+
+    const payload = await parseJsonSafely(res);
+    if (res.status === 401) {
+      logout();
+      return;
+    }
+    if (!res.ok) {
+      throw new Error(extractApiErrorMessage(payload, '清空失败'));
+    }
+
+    const summary = payload?.summary || {};
+    const success = Number(summary.success || 0);
+    const failed = Number(summary.failed || 0);
+    showToast(`注册邮箱清空完成：成功 ${success}，失败 ${failed}`, failed > 0 ? 'warning' : 'success');
+
+    mailboxClearResults = Object.entries(payload?.results || {}).map(([mailbox, item]) => ({ mailbox, ...item }));
+    loadData();
+    updateAutoRegisterMailboxSummary({ mailboxes: [] });
+  } catch (e) {
+    showToast(`注册邮箱清空失败：${e.message}`, 'error');
+  } finally {
+    isMailboxClearRunning = false;
     if (btn) btn.disabled = false;
   }
 }
@@ -791,6 +894,7 @@ async function pollAutoRegisterStatus() {
 
     const data = await res.json();
     updateAutoRegisterLogs(data.logs || []);
+    updateAutoRegisterMailboxSummary(data);
     const status = data.status;
     if (status === 'idle' || status === 'not_found') {
       updateAutoRegisterStatus('注册任务已结束');
@@ -808,6 +912,8 @@ async function pollAutoRegisterStatus() {
       const added = data.added || 0;
       const errors = data.errors || 0;
 
+      updateAutoRegisterMailboxSummary(data);
+
       if (added > autoRegisterLastAdded) {
         autoRegisterLastAdded = added;
         loadData(); // 实时刷新 token 列表
@@ -821,6 +927,7 @@ async function pollAutoRegisterStatus() {
     }
 
     if (status === 'completed') {
+      updateAutoRegisterMailboxSummary(data);
       updateAutoRegisterStatus(`注册完成，新增 ${data.added || 0} 个`);
       showToast('注册完成', 'success');
       stopAutoRegisterPolling();
@@ -831,6 +938,7 @@ async function pollAutoRegisterStatus() {
     }
 
     if (status === 'stopped') {
+      updateAutoRegisterMailboxSummary(data);
       updateAutoRegisterStatus(`注册已停止（已添加 ${data.added || 0}，失败 ${data.errors || 0}）`);
       stopAutoRegisterPolling();
       const btn = document.getElementById('auto-register-btn');
@@ -866,6 +974,10 @@ function deleteTokenByKey(tokenKey) {
   const idx = findTokenIndexByKey(tokenKey);
   if (idx < 0) return;
   deleteToken(idx);
+}
+
+function batchDelete() {
+  startBatchDelete();
 }
 
 function openEditModal(index) {
@@ -959,6 +1071,8 @@ async function saveEdit() {
       note: newNote,
       status: 'active', // default
       use_count: 0,
+      mailbox_emails: [],
+      mailbox_by_job: {},
       _selected: false
     });
   }
@@ -979,11 +1093,8 @@ async function deleteToken(index) {
   syncToServer().then(loadData);
 }
 
-function batchDelete() {
-  startBatchDelete();
-}
-
 // Reconstruct object structure and save
+
 async function syncToServer() {
   const newTokens = {};
   flatTokens.forEach(t => {
@@ -995,7 +1106,9 @@ async function syncToServer() {
       heavy_quota: t.heavy_quota,
       note: t.note,
       fail_count: t.fail_count,
-      use_count: t.use_count || 0
+      use_count: t.use_count || 0,
+      mailbox_emails: Array.isArray(t.mailbox_emails) ? t.mailbox_emails : [],
+      mailbox_by_job: t.mailbox_by_job && typeof t.mailbox_by_job === 'object' ? t.mailbox_by_job : {}
     });
   });
 
@@ -1065,6 +1178,8 @@ async function submitImport() {
         token_type: poolToType(pool),
         note: '',
         use_count: 0,
+        mailbox_emails: [],
+        mailbox_by_job: {},
         _selected: false
       });
     }
@@ -1340,9 +1455,11 @@ function setActionButtonsState() {
   const exportBtn = document.getElementById('btn-batch-export');
   const updateBtn = document.getElementById('btn-batch-update');
   const deleteBtn = document.getElementById('btn-batch-delete');
+  const clearMailboxBtn = document.getElementById('btn-batch-clear-mailbox');
   if (exportBtn) exportBtn.disabled = disabled || selectedCount === 0;
   if (updateBtn) updateBtn.disabled = disabled || selectedCount === 0;
   if (deleteBtn) deleteBtn.disabled = disabled || selectedCount === 0;
+  if (clearMailboxBtn) clearMailboxBtn.disabled = disabled || selectedCount === 0 || isMailboxClearRunning;
 }
 
 async function startBatchDelete() {

@@ -179,9 +179,23 @@
         class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100 justify-center">
         刷新
       </button>
+      <button id="btn-batch-clear-mailbox" onclick="batchClearRegisterMailboxes()" class="geist-button-outline text-xs px-3 gap-1 border-0 hover:bg-gray-100">
+        清空注册邮箱
+      </button>
       <button id="btn-batch-delete" onclick="batchDelete()" class="geist-button-danger text-xs px-3">
         删除
       </button>
+    </div>
+    <div id="batch-progress" class="hidden text-xs text-[var(--accents-5)] flex items-center gap-2">
+      <span class="toolbar-sep"></span>
+      <span id="batch-progress-text"></span>
+      <button id="btn-pause-action" type="button" class="batch-link hidden" onclick="toggleBatchPause()">暂停</button>
+      <button id="btn-stop-action" type="button" class="batch-link hidden" onclick="stopBatchRefresh()">终止</button>
+    </div>
+  </div>
+
+
+  <!-- Add Modal -->
     </div>
     <div id="batch-progress" class="hidden text-xs text-[var(--accents-5)] flex items-center gap-2">
       <span class="toolbar-sep"></span>
@@ -256,6 +270,7 @@
             本地/Docker：可自动启动本地 Turnstile Solver（默认 5 线程）。Cloudflare：需配置 YesCaptcha 或公网 Solver，且 accounts.x.ai 可能触发 Cloudflare Challenge 导致失败。
           </div>
           <div id="auto-register-status" class="text-xs text-[var(--accents-5)] hidden"></div>
+          <div id="auto-register-mailbox-summary" class="text-xs text-[var(--accents-4)] hidden"></div>
           <pre id="auto-register-logs"
             class="hidden text-xs font-mono whitespace-pre-wrap bg-[var(--accents-1)] border border-[var(--border)] rounded-md p-2 max-h-40 overflow-auto"></pre>
           <div class="flex justify-end gap-2 pt-2">

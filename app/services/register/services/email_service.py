@@ -138,3 +138,37 @@ class EmailService:
         except Exception as exc:  # pragma: no cover - network/remote errors
             print(f"Email fetch failed: {exc}")
             return None
+
+    def clear_emails(self, mailbox: str) -> dict:
+        """Clear all emails for one mailbox."""
+        normalized = str(mailbox or "").strip().lower()
+        if not normalized:
+            return {"success": False, "mailbox": "", "error": "Missing mailbox"}
+
+        try:
+            res = requests.delete(
+                f"https://{self.worker_domain}/api/emails",
+                params={"mailbox": normalized},
+                headers=self._auth_headers(),
+                timeout=10,
+            )
+            if res.status_code in {200, 204}:
+                payload: dict = {"success": True, "mailbox": normalized, "status_code": res.status_code}
+                try:
+                    body = res.json()
+                    if isinstance(body, dict):
+                        payload.update(body)
+                except Exception:
+                    text = (res.text or "").strip()
+                    if text:
+                        payload["message"] = text
+                return payload
+
+            return {
+                "success": False,
+                "mailbox": normalized,
+                "status_code": res.status_code,
+                "error": (res.text or "").strip() or f"HTTP {res.status_code}",
+            }
+        except Exception as exc:  # pragma: no cover - network/remote errors
+            return {"success": False, "mailbox": normalized, "error": str(exc)}

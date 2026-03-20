@@ -8,7 +8,7 @@ Token 数据模型
 """
 
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -65,6 +65,11 @@ class TokenInfo(BaseModel):
     tags: List[str] = Field(default_factory=list)
     note: str = ""
     last_asset_clear_at: Optional[int] = None
+    mailbox_emails: List[str] = Field(default_factory=list)
+    mailbox_by_job: Dict[str, List[str]] = Field(default_factory=dict)
+
+    class Config:
+        extra = "ignore"
     
     def is_available(self) -> bool:
         """检查是否可用（状态正常且配额 > 0）"""

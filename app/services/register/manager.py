@@ -31,13 +31,23 @@ class RegisterJob:
     error: Optional[str] = None
     last_error: Optional[str] = None
     tokens: List[str] = field(default_factory=list)
+    mailboxes: List[str] = field(default_factory=list)
+    mailbox_by_token: dict[str, List[str]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
-    def record_success(self, token: str) -> None:
+    def record_success(self, token: str, mailbox: str | None = None) -> None:
         with self._lock:
             self.completed += 1
             self.tokens.append(token)
+            if mailbox:
+                mailbox = str(mailbox or "").strip().lower()
+                if mailbox:
+                    self.mailboxes.append(mailbox)
+                    bucket = self.mailbox_by_token.get(token) or []
+                    if mailbox not in bucket:
+                        bucket.append(mailbox)
+                    self.mailbox_by_token[token] = bucket
 
     def record_added(self) -> None:
         with self._lock:
@@ -65,6 +75,9 @@ class RegisterJob:
                 "errors": self.errors,
                 "error": self.error,
                 "last_error": self.last_error,
+                "tokens": list(self.tokens),
+                "mailboxes": list(self.mailboxes),
+                "mailbox_by_token": {k: list(v) for k, v in self.mailbox_by_token.items()},
                 "started_at": int(self.started_at * 1000),
                 "finished_at": int(self.finished_at * 1000) if self.finished_at else None,
             }
@@ -264,14 +277,34 @@ class AutoRegisterManager:
             job.status = "running"
             watchdog_task = asyncio.create_task(_watchdog())
             consumer_task = asyncio.create_task(_consume_tokens())
+            loop = asyncio.get_running_loop()
+
+            async def _track_mailbox(token: str, mailbox: str) -> None:
+                try:
+                    mgr = await get_token_manager()
+                    await mgr.attach_mailbox_metadata(token, mailbox, job.job_id)
+                except Exception as exc:
+                    job.record_error(f"save mailbox failed: {exc}")
+
+            def _on_success(email: str, _password: str, token: str, _done: int, _total: int):
+                job.record_success(token, email)
+                token_queue.put(token)
+                if email:
+                    loop.call_soon_threadsafe(lambda: asyncio.create_task(_track_mailbox(token, email)))
+
             runner = RegisterRunner(
                 target_count=job.total,
                 thread_count=job.register_threads,
                 stop_event=job.stop_event,
-                on_success=lambda _email, _password, token, _done, _total: (
-                    job.record_success(token),
-                    token_queue.put(token),
-                ),
+                on_success=_on_success,
+                on_error=_on_error,
+            )
+
+            runner = RegisterRunner(
+                target_count=job.total,
+                thread_count=job.register_threads,
+                stop_event=job.stop_event,
+                on_success=_on_success,
                 on_error=_on_error,
             )
 

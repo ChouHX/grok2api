@@ -377,28 +377,53 @@ class TokenManager:
     async def add(self, token: str, pool_name: str = "ssoBasic") -> bool:
         """
         添加 Token
-        
+
         Args:
             token: Token 字符串（不含 sso= 前缀）
             pool_name: 池名称
-            
+
         Returns:
             是否成功
         """
         if pool_name not in self.pools:
             self.pools[pool_name] = TokenPool(pool_name)
             logger.info(f"Pool '{pool_name}': created")
-            
+
         pool = self.pools[pool_name]
-        
+
         token = token[4:] if token.startswith("sso=") else token
         if pool.get(token):
             logger.warning(f"Pool '{pool_name}': token already exists")
             return False
-            
+
         pool.add(TokenInfo(token=token))
         await self._save()
         logger.info(f"Pool '{pool_name}': token added")
+        return True
+
+    async def attach_mailbox_metadata(self, token_str: str, mailbox_email: str, job_id: str | None = None) -> bool:
+        """Attach worker mailbox metadata to a token."""
+        mailbox = str(mailbox_email or "").strip().lower()
+        if not mailbox:
+            return False
+
+        token, raw_token = self._find_token_info(token_str)
+        if not token:
+            logger.warning(f"Token {raw_token[:10]}...: not found for mailbox attach")
+            return False
+
+        if mailbox not in token.mailbox_emails:
+            token.mailbox_emails.append(mailbox)
+
+        if job_id:
+            job_key = str(job_id).strip()
+            if job_key:
+                bucket = token.mailbox_by_job.get(job_key) or []
+                if mailbox not in bucket:
+                    bucket.append(mailbox)
+                token.mailbox_by_job[job_key] = bucket
+
+        await self._save()
         return True
 
     async def mark_asset_clear(self, token: str) -> bool:

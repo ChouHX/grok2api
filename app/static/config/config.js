@@ -20,6 +20,10 @@ const NUMERIC_FIELDS = new Set([
   'default_count'
 ]);
 
+let workerEmailApiKey = '';
+let workerEmailConfirmResolver = null;
+let workerEmailBusy = false;
+
 const LOCALE_MAP = {
   "app": {
     "label": "应用设置",
@@ -104,7 +108,9 @@ function getSectionLabel(section) {
 async function init() {
   apiKey = await ensureApiKey();
   if (apiKey === null) return;
+  workerEmailApiKey = apiKey;
   loadData();
+  setupWorkerEmailClear();
 }
 
 async function loadData() {
@@ -127,6 +133,20 @@ function renderConfig(data) {
   const container = document.getElementById('config-container');
   container.innerHTML = '';
 
+  const workerDomainEl = document.getElementById('worker-email-domain');
+  if (workerDomainEl) {
+    const emailDomain = data?.register?.email_domain || '';
+    workerDomainEl.textContent = emailDomain || '-';
+  }
+
+  const workerSummary = document.getElementById('worker-email-summary');
+  if (workerSummary) workerSummary.textContent = '';
+  const workerResult = document.getElementById('worker-email-result');
+  if (workerResult) {
+    workerResult.textContent = '';
+    workerResult.classList.add('hidden');
+  }
+
   const sections = Object.keys(data);
   const sectionOrder = Object.keys(LOCALE_MAP);
 
@@ -134,7 +154,7 @@ function renderConfig(data) {
     const ia = sectionOrder.indexOf(a);
     const ib = sectionOrder.indexOf(b);
     if (ia !== -1 && ib !== -1) return ia - ib;
-    if (ia !== -1) return -1; // Known sections first
+    if (ia !== -1) return -1;
     if (ib !== -1) return 1;
     return 0;
   });
@@ -168,28 +188,22 @@ function renderConfig(data) {
     keys.forEach(key => {
       const val = items[key];
       const text = getText(section, key);
-
-      // Container
       const fieldCard = document.createElement('div');
       fieldCard.className = 'config-field';
 
-      // Title
       const titleEl = document.createElement('div');
       titleEl.className = 'config-field-title';
       titleEl.textContent = text.title;
       fieldCard.appendChild(titleEl);
 
-      // Description (Muted)
       const descEl = document.createElement('p');
       descEl.className = 'config-field-desc';
       descEl.textContent = text.desc;
       fieldCard.appendChild(descEl);
 
-      // Input Wrapper
       const inputWrapper = document.createElement('div');
       inputWrapper.className = 'config-field-input';
 
-      // Input Logic
       let input;
       if (typeof val === 'boolean') {
         const label = document.createElement('label');
@@ -208,40 +222,17 @@ function renderConfig(data) {
         label.appendChild(input);
         label.appendChild(slider);
         inputWrapper.appendChild(label);
-      }
-      else if (key === 'image_format') {
-        input = document.createElement('select');
-        input.className = 'geist-input h-[34px]'; // Matches reduced padding inputs
-        input.dataset.section = section;
-        input.dataset.key = key;
-
-        const opts = [
-          { val: 'url', text: 'URL' },
-          { val: 'base64', text: 'Base64' },
-          { val: 'b64_json', text: 'b64_json' }
-        ];
-
-        opts.forEach(opt => {
-          const option = document.createElement('option');
-          option.value = opt.val;
-          option.text = opt.text;
-          if (val === opt.val) option.selected = true;
-          input.appendChild(option);
-        });
-        inputWrapper.appendChild(input);
-      }
-      else if (key === 'image_generation_method') {
+      } else if (key === 'image_format') {
         input = document.createElement('select');
         input.className = 'geist-input h-[34px]';
         input.dataset.section = section;
         input.dataset.key = key;
 
-        const opts = [
-          { val: 'legacy', text: '旧方法（默认）' },
-          { val: 'imagine_ws_experimental', text: '新方法（实验性）' }
-        ];
-
-        opts.forEach(opt => {
+        [
+          { val: 'url', text: 'URL' },
+          { val: 'base64', text: 'Base64' },
+          { val: 'b64_json', text: 'b64_json' }
+        ].forEach(opt => {
           const option = document.createElement('option');
           option.value = opt.val;
           option.text = opt.text;
@@ -249,8 +240,24 @@ function renderConfig(data) {
           input.appendChild(option);
         });
         inputWrapper.appendChild(input);
-      }
-      else if (key === 'video_format') {
+      } else if (key === 'image_generation_method') {
+        input = document.createElement('select');
+        input.className = 'geist-input h-[34px]';
+        input.dataset.section = section;
+        input.dataset.key = key;
+
+        [
+          { val: 'legacy', text: '旧方法（默认）' },
+          { val: 'imagine_ws_experimental', text: '新方法（实验性）' }
+        ].forEach(opt => {
+          const option = document.createElement('option');
+          option.value = opt.val;
+          option.text = opt.text;
+          if (val === opt.val) option.selected = true;
+          input.appendChild(option);
+        });
+        inputWrapper.appendChild(input);
+      } else if (key === 'video_format') {
         input = document.createElement('select');
         input.className = 'geist-input h-[34px]';
         input.dataset.section = section;
@@ -261,10 +268,8 @@ function renderConfig(data) {
         option.text = 'URL';
         option.selected = true;
         input.appendChild(option);
-
         inputWrapper.appendChild(input);
-      }
-      else if (Array.isArray(val) || typeof val === 'object') {
+      } else if (Array.isArray(val) || typeof val === 'object') {
         input = document.createElement('textarea');
         input.className = 'geist-input font-mono text-xs';
         input.rows = 4;
@@ -273,8 +278,7 @@ function renderConfig(data) {
         input.dataset.key = key;
         input.dataset.type = 'json';
         inputWrapper.appendChild(input);
-      }
-      else {
+      } else {
         input = document.createElement('input');
         input.type = 'text';
         input.className = 'geist-input';
@@ -282,19 +286,14 @@ function renderConfig(data) {
         input.dataset.section = section;
         input.dataset.key = key;
 
-        if (key === 'app_key') input.type = 'text';
-
         if (key === 'api_key' || key === 'app_key') {
           const wrapper = document.createElement('div');
           wrapper.className = 'config-secret-row';
-
-          input.className = 'geist-input';
 
           const copyBtn = document.createElement('button');
           copyBtn.className = 'config-copy-btn';
           copyBtn.type = 'button';
           copyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-
           copyBtn.onclick = () => copyToClipboard(input.value, copyBtn);
 
           wrapper.appendChild(input);
@@ -310,11 +309,107 @@ function renderConfig(data) {
     });
 
     card.appendChild(grid);
+    if (grid.children.length > 0) container.appendChild(card);
+  });
 
-    if (grid.children.length > 0) {
-      container.appendChild(card);
+  setupWorkerEmailClear();
+}
+
+function setupWorkerEmailClear() {
+  const btn = document.getElementById('worker-email-clear-btn');
+  const input = document.getElementById('worker-email-input');
+  const summary = document.getElementById('worker-email-summary');
+  const result = document.getElementById('worker-email-result');
+  if (!btn || !input) return;
+
+  if (btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+
+  btn.addEventListener('click', async () => {
+    if (workerEmailBusy) return;
+    const mailboxes = parseWorkerEmailList(input.value);
+    if (!mailboxes.length) {
+      showToast('请输入至少一个邮箱地址', 'warning');
+      return;
+    }
+
+    const ok = await confirmAction(`确认清空 ${mailboxes.length} 个 Worker 邮箱中的全部邮件吗？`, {
+      okText: '清空',
+      cancelText: '取消'
+    });
+    if (!ok) return;
+
+    workerEmailBusy = true;
+    btn.disabled = true;
+    btn.textContent = '清空中...';
+    if (summary) summary.textContent = `正在处理 ${mailboxes.length} 个邮箱...`;
+    if (result) {
+      result.textContent = '';
+      result.classList.add('hidden');
+    }
+
+    try {
+      const res = await fetch('/api/v1/admin/worker-emails/clear', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildAuthHeaders(workerEmailApiKey)
+        },
+        body: JSON.stringify({ mailboxes })
+      });
+
+      if (res.status === 401) {
+        logout();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || data.error || '清空失败');
+      }
+
+      const summaryData = data.summary || {};
+      const success = Number(summaryData.success || 0);
+      const failed = Number(summaryData.failed || 0);
+      if (summary) {
+        summary.textContent = `完成：成功 ${success}，失败 ${failed}`;
+      }
+
+      const results = data.results || {};
+      const lines = Object.entries(results).map(([mailbox, item]) => {
+        if (item?.status === 'success') {
+          return `${mailbox}: success`;
+        }
+        return `${mailbox}: ${item?.error || 'failed'}`;
+      });
+      if (result) {
+        result.textContent = lines.join('\n');
+        result.classList.remove('hidden');
+      }
+
+      showToast(`Worker 邮件清空完成（成功 ${success}，失败 ${failed}）`, failed ? 'warning' : 'success');
+    } catch (e) {
+      if (summary) summary.textContent = `清空失败：${e.message}`;
+      if (result) {
+        result.textContent = e.message;
+        result.classList.remove('hidden');
+      }
+      showToast(`清空失败：${e.message}`, 'error');
+    } finally {
+      workerEmailBusy = false;
+      btn.disabled = false;
+      btn.textContent = '批量清空邮件';
     }
   });
+}
+
+function parseWorkerEmailList(value) {
+  return Array.from(new Set(
+    String(value || '')
+      .split(/[\n,\s]+/)
+      .map(item => item.trim().toLowerCase())
+      .filter(Boolean)
+  ));
 }
 
 async function saveConfig() {

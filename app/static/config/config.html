@@ -42,6 +42,23 @@
         <div class="text-center py-12 text-[var(--accents-4)]">加载中...</div>
       </div>
 
+      <div class="rounded-xl border border-[var(--border)] bg-white p-5 space-y-4">
+        <div>
+          <h3 class="text-lg font-semibold tracking-tight">Worker 邮件批量清空</h3>
+          <p class="text-sm text-[var(--accents-4)] mt-1">输入一个或多个邮箱地址，每行一个，点击后会调用当前配置的 Worker 域名进行清空。</p>
+        </div>
+        <div class="space-y-2">
+          <label for="worker-email-input" class="text-sm font-medium text-[var(--accents-5)]">邮箱地址</label>
+          <textarea id="worker-email-input" rows="5" class="geist-input font-mono text-sm w-full" placeholder="user1@xcmt.online\nuser2@xcmt.online"></textarea>
+          <div class="text-xs text-[var(--accents-4)]">当前邮箱域名：<span id="worker-email-domain">-</span></div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <button id="worker-email-clear-btn" type="button" class="geist-button-danger">批量清空邮件</button>
+          <span id="worker-email-summary" class="text-sm text-[var(--accents-4)]"></span>
+        </div>
+        <pre id="worker-email-result" class="hidden whitespace-pre-wrap break-all rounded-lg bg-[var(--accents-1)] p-4 text-xs font-mono text-[var(--accents-5)] overflow-x-auto"></pre>
+      </div>
+
     </div>
   </main>
   <div id="app-footer"></div>

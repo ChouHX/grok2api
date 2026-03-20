@@ -3,33 +3,33 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Any, Optional
 
-from app.core.auth import verify_api_key
+from app.core.auth import verify_api_key, _load_legacy_api_keys
 from app.core.config import config, get_config
-from app.core.storage import get_storage, LocalStorage, RedisStorage, SQLStorage
-import os
-from pathlib import Path
-import aiofiles
-import asyncio
-import json
-import time
-import uuid
-import orjson
-from starlette.websockets import WebSocketDisconnect, WebSocketState
 from app.core.logger import logger
-from app.services.register import get_auto_register_manager
-from app.services.register.account_settings_refresh import (
-    refresh_account_settings_for_tokens,
-    normalize_sso_token as normalize_refresh_token,
-)
+from app.core.storage import get_storage, LocalStorage, RedisStorage, SQLStorage
 from app.services.api_keys import api_key_manager
-from app.services.grok.model import ModelService
 from app.services.grok.imagine_generation import (
     collect_experimental_generation_images,
     is_valid_image_value as is_valid_imagine_image_value,
     resolve_aspect_ratio as resolve_imagine_aspect_ratio,
 )
+from app.services.grok.model import ModelService
+from app.services.register import get_auto_register_manager
+from app.services.register.account_settings_refresh import (
+    refresh_account_settings_for_tokens,
+    normalize_sso_token as normalize_refresh_token,
+)
+from app.services.register.services.email_service import EmailService
 from app.services.token import get_token_manager
-from app.core.auth import _load_legacy_api_keys
+from pathlib import Path
+import aiofiles
+import asyncio
+import json
+import os
+import orjson
+import time
+import uuid
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 
 router = APIRouter()
@@ -448,6 +448,9 @@ def _normalize_admin_token_item(pool_name: str, item: Any) -> dict | None:
     quota, quota_known = _parse_quota_value(item.get("quota"))
     heavy_quota, heavy_quota_known = _parse_quota_value(item.get("heavy_quota"))
 
+    mailbox_emails = item.get("mailbox_emails") if isinstance(item.get("mailbox_emails"), list) else []
+    mailbox_by_job = item.get("mailbox_by_job") if isinstance(item.get("mailbox_by_job"), dict) else {}
+
     return {
         "token": token,
         "status": _normalize_token_status(item.get("status")),
@@ -459,6 +462,12 @@ def _normalize_admin_token_item(pool_name: str, item: Any) -> dict | None:
         "note": str(item.get("note") or ""),
         "fail_count": _safe_int(item.get("fail_count") or 0, 0),
         "use_count": _safe_int(item.get("use_count") or 0, 0),
+        "mailbox_emails": [str(x).strip().lower() for x in mailbox_emails if str(x).strip()],
+        "mailbox_by_job": {
+            str(k): [str(x).strip().lower() for x in v if str(x).strip()]
+            for k, v in mailbox_by_job.items()
+            if isinstance(v, list)
+        },
     }
 
 
@@ -1102,6 +1111,70 @@ async def clear_online_cache_api(data: dict):
     finally:
         if delete_service:
             await delete_service.close()
+
+
+@router.post("/api/v1/admin/worker-emails/clear", dependencies=[Depends(verify_api_key)])
+async def clear_worker_emails_api(data: dict):
+    """批量清空 Worker 邮箱邮件。"""
+    data = data or {}
+    candidates: list[str] = []
+
+    single = data.get("mailbox")
+    if isinstance(single, str):
+        candidates.append(single)
+
+    batch = data.get("mailboxes")
+    if isinstance(batch, list):
+        candidates.extend([item for item in batch if isinstance(item, str)])
+
+    email_domain = str(get_config("register.email_domain", "") or "").strip().lower()
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        mailbox = str(raw or "").strip().lower()
+        if not mailbox:
+            continue
+        if email_domain and not mailbox.endswith(f"@{email_domain}"):
+            raise HTTPException(status_code=400, detail=f"Mailbox outside configured email domain: {mailbox}")
+        if mailbox in seen:
+            continue
+        seen.add(mailbox)
+        normalized.append(mailbox)
+
+    if not normalized:
+        raise HTTPException(status_code=400, detail="No mailboxes provided")
+
+    batch_size = get_config("performance.admin_assets_batch_size", 10)
+    try:
+        batch_size = int(batch_size)
+    except Exception:
+        batch_size = 10
+    batch_size = max(1, batch_size)
+
+    service = EmailService()
+    results: dict[str, dict[str, Any]] = {}
+    summary = {"total": len(normalized), "success": 0, "failed": 0}
+
+    async def _clear_one(mailbox: str):
+        try:
+            result = await asyncio.to_thread(service.clear_emails, mailbox)
+            if result.get("success"):
+                return mailbox, {"status": "success", "result": result}
+            return mailbox, {"status": "error", "error": result.get("error") or result.get("message") or "Failed to clear mailbox"}
+        except Exception as exc:
+            return mailbox, {"status": "error", "error": str(exc)}
+
+    for i in range(0, len(normalized), batch_size):
+        chunk = normalized[i:i + batch_size]
+        chunk_results = await asyncio.gather(*[_clear_one(mailbox) for mailbox in chunk])
+        for mailbox, result in chunk_results:
+            results[mailbox] = result
+            if result.get("status") == "success":
+                summary["success"] += 1
+            else:
+                summary["failed"] += 1
+
+    return {"status": "success", "summary": summary, "results": results}
 
 
 @router.get("/api/v1/admin/metrics", dependencies=[Depends(verify_api_key)])
